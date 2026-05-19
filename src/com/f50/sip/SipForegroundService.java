@@ -9,9 +9,14 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.telephony.PhoneStateListener;
 import android.telephony.SmsManager;
+import android.telephony.TelephonyCallback;
+import android.telephony.TelephonyManager;
 import android.util.Log;
 
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 
 /** Long-running foreground service that:
@@ -33,6 +38,11 @@ public class SipForegroundService extends Service {
 
     private SipClient client;
     private Thread listenThread, regThread, workerThread;
+    private Executor telExec;
+    private Object telCallback;     // TelephonyCallback (API 31+) or PhoneStateListener
+    private TelephonyManager tm;
+    private String lastNumber;
+    private int    lastState = TelephonyManager.CALL_STATE_IDLE;
     private final LinkedBlockingQueue<Runnable> work = new LinkedBlockingQueue<>();
     private volatile boolean running;
     private PowerManager.WakeLock wakeLock;
@@ -72,6 +82,87 @@ public class SipForegroundService extends Service {
         running = true;
         startWorker();
         startSip();
+        startCellularCallWatcher();
+    }
+
+    // ─── cellular-call passive watcher ────────────────────────────────────
+    //
+    // We don't hold the DIALER role (the F50 firmware has no DIALER role at
+    // all), so we cannot answer or end cellular calls. But READ_PHONE_STATE
+    // is enough to *see* the incoming call (state + number) and announce it
+    // to companions over SIP. Crash-resistant: any failure here is logged
+    // and the rest of the service still runs.
+    private void startCellularCallWatcher() {
+        try {
+            tm = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
+            if (tm == null) {
+                Log.w(TAG, "TelephonyManager not available — skipping call watcher");
+                return;
+            }
+            if (Build.VERSION.SDK_INT >= 31) {
+                telExec = Executors.newSingleThreadExecutor();
+                // CallStateListener on API 31+ does NOT carry the phone number
+                // unless our app holds READ_PHONE_NUMBERS + the dialer role.
+                // We don't, so we only see state transitions — useful enough
+                // for "ringing now / hung up" signals on SIP.
+                CallStateCb cb = new CallStateCb();
+                tm.registerTelephonyCallback(telExec, cb);
+                telCallback = cb;
+                Log.i(TAG, "TelephonyCallback registered (API 31+)");
+            } else {
+                PhoneStateListener psl = new PhoneStateListener() {
+                    @Override public void onCallStateChanged(int state, String number) {
+                        handleCallState(state, number);
+                    }
+                };
+                tm.listen(psl, PhoneStateListener.LISTEN_CALL_STATE);
+                telCallback = psl;
+                Log.i(TAG, "PhoneStateListener registered (legacy)");
+            }
+        } catch (Throwable t) {
+            Log.e(TAG, "call watcher init failed", t);
+        }
+    }
+
+    private class CallStateCb extends TelephonyCallback
+            implements TelephonyCallback.CallStateListener {
+        @Override public void onCallStateChanged(int state) {
+            handleCallState(state, lastNumber);
+        }
+    }
+
+    private void handleCallState(int state, String number) {
+        if (state == lastState) return;     // dedupe — Android fires repeats
+        lastState = state;
+        if (number != null && !number.isEmpty()) lastNumber = number;
+        final String num = lastNumber;
+        switch (state) {
+            case TelephonyManager.CALL_STATE_RINGING:
+                Log.i(TAG, "cellular RINGING from " + num);
+                work.offer(new Runnable() {
+                    @Override public void run() {
+                        if (client != null) client.message("📞 Incoming call from " + (num == null ? "unknown" : num));
+                    }
+                });
+                break;
+            case TelephonyManager.CALL_STATE_OFFHOOK:
+                Log.i(TAG, "cellular OFFHOOK");
+                work.offer(new Runnable() {
+                    @Override public void run() {
+                        if (client != null) client.message("📞 Call connected" + (num == null ? "" : " (" + num + ")"));
+                    }
+                });
+                break;
+            case TelephonyManager.CALL_STATE_IDLE:
+                Log.i(TAG, "cellular IDLE");
+                work.offer(new Runnable() {
+                    @Override public void run() {
+                        if (client != null) client.message("📴 Call ended");
+                    }
+                });
+                lastNumber = null;
+                break;
+        }
     }
 
     @Override
@@ -101,6 +192,15 @@ public class SipForegroundService extends Service {
     public void onDestroy() {
         super.onDestroy();
         running = false;
+        if (tm != null && telCallback != null) {
+            try {
+                if (Build.VERSION.SDK_INT >= 31 && telCallback instanceof TelephonyCallback) {
+                    tm.unregisterTelephonyCallback((TelephonyCallback) telCallback);
+                } else if (telCallback instanceof PhoneStateListener) {
+                    tm.listen((PhoneStateListener) telCallback, PhoneStateListener.LISTEN_NONE);
+                }
+            } catch (Throwable ignored) {}
+        }
         if (client != null) client.close();
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
     }
