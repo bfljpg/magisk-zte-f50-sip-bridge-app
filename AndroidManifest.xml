@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     package="com.f50.sip"
     android:versionCode="1"
     android:versionName="1.0">
@@ -26,6 +27,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Audio bridge (WSAudioServer): MIC for capture, MODIFY_AUDIO_SETTINGS
+         for routing through VOICE_CALL stream. CAPTURE_AUDIO_OUTPUT is the
+         signature permission needed for AudioSource.VOICE_CALL — without
+         priv-app whitelist we fall back to MIC at lower quality. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.CAPTURE_AUDIO_OUTPUT"
+                     tools:ignore="ProtectedPermissions" />
 
     <!-- Foreground services (Android 14+) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

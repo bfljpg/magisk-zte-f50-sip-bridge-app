@@ -43,6 +43,7 @@ public class SipForegroundService extends Service {
     private TelephonyManager tm;
     private String lastNumber;
     private int    lastState = TelephonyManager.CALL_STATE_IDLE;
+    private WSAudioServer wsAudio;
     private final LinkedBlockingQueue<Runnable> work = new LinkedBlockingQueue<>();
     private volatile boolean running;
     private PowerManager.WakeLock wakeLock;
@@ -83,6 +84,17 @@ public class SipForegroundService extends Service {
         startWorker();
         startSip();
         startCellularCallWatcher();
+        startWSAudio();
+    }
+
+    private void startWSAudio() {
+        try {
+            wsAudio = new WSAudioServer();
+            wsAudio.start();
+            Log.i(TAG, "WSAudioServer started on 127.0.0.1:8963");
+        } catch (Throwable t) {
+            Log.e(TAG, "WSAudioServer start failed", t);
+        }
     }
 
     // ─── cellular-call passive watcher ────────────────────────────────────
@@ -202,6 +214,9 @@ public class SipForegroundService extends Service {
             } catch (Throwable ignored) {}
         }
         if (client != null) client.close();
+        if (wsAudio != null) {
+            try { wsAudio.close(); } catch (Throwable ignored) {}
+        }
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
     }
 
