@@ -44,6 +44,8 @@ public class SipForegroundService extends Service {
     private String lastNumber;
     private int    lastState = TelephonyManager.CALL_STATE_IDLE;
     private WSAudioServer wsAudio;
+    private Thread keepaliveThread;
+    private volatile boolean keepaliveActive;
     private final LinkedBlockingQueue<Runnable> work = new LinkedBlockingQueue<>();
     private volatile boolean running;
     private PowerManager.WakeLock wakeLock;
@@ -143,6 +145,44 @@ public class SipForegroundService extends Service {
         }
     }
 
+    // Modem call-keepalive — pokes the modem with AT+CLCC every ~3s while
+    // OFFHOOK so the Spreadtrum CP firmware's voice-disabled-SKU timer
+    // gets reset before it tears the call down at ~16-20s. We spawn
+    // /system/bin/su as a fixed argv (no shell parsing of any user
+    // string), which then invokes /system/bin/sendat with a fixed
+    // argument — input is a hard-coded literal, no injection surface.
+    private void startKeepalive() {
+        if (keepaliveThread != null && keepaliveThread.isAlive()) return;
+        keepaliveActive = true;
+        keepaliveThread = new Thread(new Runnable() {
+            @Override public void run() {
+                final String[] argv = { "su", "-c", "sendat -c AT+CLCC" };
+                while (keepaliveActive) {
+                    try {
+                        Process p = new ProcessBuilder(argv)
+                                .redirectErrorStream(true).start();
+                        p.waitFor();
+                    } catch (Throwable t) {
+                        Log.e(TAG, "keepalive run", t);
+                    }
+                    try { Thread.sleep(3000); }
+                    catch (InterruptedException e) { return; }
+                }
+            }
+        }, "f50sip-call-keepalive");
+        keepaliveThread.setDaemon(true);
+        keepaliveThread.start();
+        Log.i(TAG, "call-keepalive started (3s AT+CLCC)");
+    }
+
+    private void stopKeepalive() {
+        if (!keepaliveActive) return;
+        keepaliveActive = false;
+        if (keepaliveThread != null) keepaliveThread.interrupt();
+        keepaliveThread = null;
+        Log.i(TAG, "call-keepalive stopped");
+    }
+
     private void handleCallState(int state, String number) {
         if (state == lastState) return;     // dedupe — Android fires repeats
         lastState = state;
@@ -164,6 +204,7 @@ public class SipForegroundService extends Service {
                         if (client != null) client.message("📞 Call connected" + (num == null ? "" : " (" + num + ")"));
                     }
                 });
+                startKeepalive();
                 break;
             case TelephonyManager.CALL_STATE_IDLE:
                 Log.i(TAG, "cellular IDLE");
@@ -173,6 +214,7 @@ public class SipForegroundService extends Service {
                     }
                 });
                 lastNumber = null;
+                stopKeepalive();
                 break;
         }
     }

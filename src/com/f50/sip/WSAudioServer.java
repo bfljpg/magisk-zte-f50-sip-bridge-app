@@ -258,18 +258,25 @@ public final class WSAudioServer implements Runnable {
                     AudioFormat.CHANNEL_IN_STEREO,
                     AudioFormat.ENCODING_PCM_16BIT);
             if (bufSize <= 0) bufSize = FRAME_BYTES * 4;
-            // Prefer VOICE_CALL (system-signature only); fall back to MIC.
+            // VOICE_CALL is the only useful source for cellular bridging —
+            // it tees the call's downlink (and on some HALs also the uplink
+            // mic) without stealing the mic from the modem. It requires the
+            // signature permission CAPTURE_AUDIO_OUTPUT, which an unsigned
+            // APK cannot hold.
+            //
+            // Fallback to MIC is *broken* in practice on cellular: opening
+            // AudioRecord(MIC) while a GSM call is up tells AudioFlinger
+            // that an app wants the microphone — the routing layer takes
+            // it from the modem and gives it to us. The modem then sees
+            // silence on uplink and tears the call down at ~20 s. So we
+            // explicitly do NOT fall back to MIC any more.
             AudioRecord rec = tryOpen(MediaRecorder.AudioSource.VOICE_CALL, bufSize);
             String src = "VOICE_CALL";
             if (rec == null || rec.getState() != AudioRecord.STATE_INITIALIZED) {
                 if (rec != null) rec.release();
-                rec = tryOpen(MediaRecorder.AudioSource.MIC, bufSize);
-                src = "MIC";
-            }
-            if (rec == null || rec.getState() != AudioRecord.STATE_INITIALIZED) {
-                Log.w(TAG, "no AudioRecord source — sending silence");
+                Log.w(TAG, "VOICE_CALL unavailable (CAPTURE_AUDIO_OUTPUT not held) — silence mode; "
+                        + "cellular call won't be torn down by mic theft");
                 sendSilence();
-                if (rec != null) rec.release();
                 return;
             }
             Log.i(TAG, "AudioRecord source=" + src + " buf=" + bufSize);

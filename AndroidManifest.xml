@@ -70,14 +70,16 @@
             </intent-filter>
         </activity>
 
-        <!-- Telecom InCallService — receives cellular call events -->
+        <!-- Telecom InCallService (DISABLED diagnostic build) — hypothesis:
+             binding this service without ever calling Call.answer() /
+             pushing UI causes Telecom to drop the call at ~15-20 s.
+             Removing the intent-filter from declaration so Telecom
+             ignores us and uses its own default flow. -->
         <service
             android:name=".SipInCallService"
             android:permission="android.permission.BIND_INCALL_SERVICE"
-            android:exported="true">
-            <meta-data
-                android:name="android.telecom.IN_CALL_SERVICE_UI"
-                android:value="true" />
+            android:exported="true"
+            android:enabled="false">
             <intent-filter>
                 <action android:name="android.telecom.InCallService" />
             </intent-filter>
