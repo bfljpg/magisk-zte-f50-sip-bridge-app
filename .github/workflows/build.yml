@@ -18,18 +18,13 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set Android SDK Environment
+      - name: Install Android Platform 33
         run: |
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
-          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-33" "build-tools;33.0.2"
 
-      - name: Inspect and Run build.sh
+      - name: Run build.sh
         run: |
-          echo "=== Dizin İçeriği ==="
-          ls -la
-          echo "=== build.sh İçeriği ==="
-          cat build.sh
-          echo "=== Derleme Başlatılıyor ==="
           chmod +x build.sh
           ./build.sh
 
