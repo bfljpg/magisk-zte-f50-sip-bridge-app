@@ -21,8 +21,8 @@ jobs:
       - name: Install Android Platform 33
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-33" "build-tools;33.0.2"
-
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-33" "build-tools;35.0.0"
+      
       - name: Run build.sh
         run: |
           chmod +x build.sh
