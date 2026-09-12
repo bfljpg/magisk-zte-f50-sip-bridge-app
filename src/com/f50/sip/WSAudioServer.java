@@ -1,5 +1,6 @@
 package com.f50.sip;
 
+import android.content.Context;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioRecord;
@@ -46,13 +47,18 @@ public final class WSAudioServer implements Runnable {
     private static final int SAMPLE_RATE = 48000;
     private static final int CHANNELS    = 2;
     private static final int FRAME_MS    = 20;
-    private static final int FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS / 1000; // 960
-    private static final int FRAME_BYTES   = FRAME_SAMPLES * CHANNELS * 2;  // 3840
+    private static final int FRAME_SAMPLES = SAMPLE_RATE * FRAME_MS / 1000;
+    private static final int FRAME_BYTES   = FRAME_SAMPLES * CHANNELS * 2;
 
+    private final Context appCtx;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private ServerSocket server;
     private Thread acceptThread;
-
+    
+    public WSAudioServer(Context ctx) {
+        this.appCtx = ctx.getApplicationContext();
+    }
+    
     public void start() {
         if (running.getAndSet(true)) return;
         acceptThread = new Thread(this, "f50sip-wsaudio-accept");
@@ -86,40 +92,58 @@ public final class WSAudioServer implements Runnable {
         }
     }
 
-    private void handleClient(Socket sock) {
-        try {
-            sock.setSoTimeout(0);
-            InputStream in = sock.getInputStream();
-            OutputStream out = sock.getOutputStream();
+private void handleClient(Socket sock) {
+    try {
+        sock.setSoTimeout(0);
+        InputStream in = sock.getInputStream();
+        OutputStream out = sock.getOutputStream();
 
-            if (!handshake(in, out)) {
-                Log.w(TAG, "handshake rejected");
-                sock.close();
-                return;
-            }
-            Log.i(TAG, "handshake OK, starting audio bridge");
-
-            // Capture cellular-side audio → push PCM Int16 LE stereo 48 kHz over WS.
-            CaptureLoop cap = new CaptureLoop(out);
-            Thread capT = new Thread(cap, "f50sip-wsaudio-capture");
-            capT.setDaemon(true);
-            capT.start();
-
-            // Read inbound frames (Linphone→cellular). For now discard until
-            // we have the priv-app permission to play onto STREAM_VOICE_CALL.
-            // Frames must still be drained or the TCP buffer fills.
-            try {
-                ReadLoop reader = new ReadLoop(in);
-                reader.run();
-            } finally {
-                cap.stop();
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "client", e);
-        } finally {
-            try { sock.close(); } catch (IOException ignored) {}
+        if (!handshake(in, out)) {
+            Log.w(TAG, "handshake rejected");
+            sock.close();
+            return;
         }
+        Log.i(TAG, "handshake OK, starting audio bridge");
+
+        enableAcousticRoute();
+
+        CaptureLoop cap = new CaptureLoop(out);
+        Thread capT = new Thread(cap, "f50sip-wsaudio-capture");
+        capT.setDaemon(true);
+        capT.start();
+
+        try {
+            ReadLoop reader = new ReadLoop(in);
+            reader.run();
+        } finally {
+            cap.stop();
+            restoreAudioRoute();
+        }
+    } catch (Exception e) {
+        Log.e(TAG, "client", e);
+    } finally {
+        try { sock.close(); } catch (IOException ignored) {}
     }
+}
+
+    private void enableAcousticRoute() {
+    try {
+        AudioManager am = (AudioManager) appCtx.getSystemService(Context.AUDIO_SERVICE);
+        am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+        am.setSpeakerphoneOn(true);
+        Log.i(TAG, "acoustic route: speakerphone ON, mode=IN_COMMUNICATION");
+    } catch (Throwable t) {
+        Log.w(TAG, "enableAcousticRoute failed", t);
+    }
+}
+
+private void restoreAudioRoute() {
+    try {
+        AudioManager am = (AudioManager) appCtx.getSystemService(Context.AUDIO_SERVICE);
+        am.setSpeakerphoneOn(false);
+        am.setMode(AudioManager.MODE_NORMAL);
+    } catch (Throwable ignored) {}
+}
 
     // ─── handshake (server side, RFC 6455) ─────────────────────────────────
 
@@ -274,10 +298,15 @@ public final class WSAudioServer implements Runnable {
             String src = "VOICE_CALL";
             if (rec == null || rec.getState() != AudioRecord.STATE_INITIALIZED) {
                 if (rec != null) rec.release();
-                Log.w(TAG, "VOICE_CALL unavailable (CAPTURE_AUDIO_OUTPUT not held) — silence mode; "
-                        + "cellular call won't be torn down by mic theft");
-                sendSilence();
-                return;
+                Log.w(TAG, "VOICE_CALL unavailable — falling back to MIC (acoustic loopback)");
+                rec = tryOpen(MediaRecorder.AudioSource.MIC, bufSize);
+                src = "MIC";
+                if (rec == null || rec.getState() != AudioRecord.STATE_INITIALIZED) {
+                    if (rec != null) rec.release();
+                    Log.w(TAG, "MIC also unavailable — silence mode");
+                    sendSilence();
+                    return;
+                }
             }
             Log.i(TAG, "AudioRecord source=" + src + " buf=" + bufSize);
             try {
