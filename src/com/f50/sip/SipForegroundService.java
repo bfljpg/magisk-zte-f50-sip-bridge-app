@@ -91,7 +91,7 @@ public class SipForegroundService extends Service {
 
     private void startWSAudio() {
         try {
-            wsAudio = new WSAudioServer();
+            wsAudio = new WSAudioServer(getApplicationContext());
             wsAudio.start();
             Log.i(TAG, "WSAudioServer started on 127.0.0.1:8963");
         } catch (Throwable t) {
