@@ -1,4 +1,4 @@
-name: Build APK
+name: Build via build.sh
 
 on:
   push:
@@ -18,14 +18,32 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Make Gradlew Executable
-        run: chmod +x gradlew
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Generate Gradle Wrapper
+        run: |
+          gradle wrapper
+          chmod +x gradlew || true
 
-      - name: Upload APK Artifact
+      - name: Set Android SDK Environment
+        run: |
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+
+      - name: Run build.sh
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Upload Build Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sip-bridge-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: sip-bridge-build-output
+          path: |
+            **/*.apk
+            **/*.zip
+          if-no-files-found: warn
