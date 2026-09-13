@@ -126,12 +126,13 @@ private void handleClient(Socket sock) {
     }
 }
 
-    private void enableAcousticRoute() {
+private void enableAcousticRoute() {
     try {
         AudioManager am = (AudioManager) appCtx.getSystemService(Context.AUDIO_SERVICE);
-        am.setMode(AudioManager.MODE_IN_COMMUNICATION);
+        // setMode() ÇAĞIRMA — sistem zaten MODE_IN_CALL'a alıyor, bizim
+        // ezmemiz Telephony Rx/Tx routing'ini bozuyor olabilir.
         am.setSpeakerphoneOn(true);
-        Log.i(TAG, "acoustic route: speakerphone ON, mode=IN_COMMUNICATION");
+        Log.i(TAG, "acoustic route: speakerphone ON (mode untouched, current=" + am.getMode() + ")");
     } catch (Throwable t) {
         Log.w(TAG, "enableAcousticRoute failed", t);
     }
